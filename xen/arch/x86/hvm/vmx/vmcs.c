@@ -1795,6 +1795,11 @@ void vmx_do_resume(struct vcpu *v)
     reset_stack_and_jump(vmx_asm_do_vmentry);
 }
 
+paddr_t vmx_temp_vmcs(void)
+{
+    return vmx_alloc_vmcs();
+}
+
 static inline unsigned long vmr(unsigned long field)
 {
     unsigned long val;

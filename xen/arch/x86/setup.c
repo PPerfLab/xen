@@ -53,6 +53,7 @@
 #include <asm/cpuid.h>
 #include <asm/spec_ctrl.h>
 #include <asm/guest.h>
+#include <asm/dual_monitor_mode.h>
 
 /* opt_nosmp: If true, secondary processors are ignored. */
 static bool __initdata opt_nosmp;
@@ -1661,6 +1662,9 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     if ( num_parked )
         printk(XENLOG_INFO "Parked %u CPUs\n", num_parked);
     smp_cpus_done();
+
+    smp_call_function(launch_stm, NULL, 0);
+    launch_stm(NULL);
 
     do_initcalls();
 

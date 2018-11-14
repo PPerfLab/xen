@@ -26,6 +26,7 @@ obj-y += domctl.o
 obj-y += domain.o
 obj-bin-y += dom0_build.init.o
 obj-y += domain_page.o
+obj-y += dual_monitor_mode.o
 obj-y += e820.o
 obj-y += extable.o
 obj-y += flushtlb.o
