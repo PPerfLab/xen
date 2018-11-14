@@ -32,13 +32,57 @@ static void set_temp_vmcs(void)
     return;
 }
 
+uint32_t get_bios_resource(STM_RSC *resource)
+{
+    void *resourcelist;
+    uint32_t eax_reg = 0;
+    uint32_t ebx_reg = 0;
+    uint32_t ecx_reg = 0;
+    uint32_t edx_reg = 0;
+    int page_index = 0;
+
+    printk("STM: Obtaining BIOS resource list\n");
+
+    if ( (resourcelist = alloc_xenheap_pages(2, 0)) == NULL )
+    {
+        printk("STM: Failed to allocate resource page.\n");
+        return -1;
+    }
+
+    eax_reg = STM_API_GET_BIOS_RESOURCES;
+
+    ebx_reg = (uint64_t)__pa((struct page_info*)resourcelist + \
+            page_index*PAGE_SIZE);
+    ecx_reg = ((uint64_t)__pa((struct page_info*)resourcelist + \
+                page_index*PAGE_SIZE)) >> 32;
+    edx_reg = page_index;
+
+    asm volatile(
+            ".byte 0x0f,0x01,0xc1\n"
+            :"=a"(eax_reg)
+            :"a"(eax_reg), "b"(ebx_reg), "c"(ecx_reg), "d"(edx_reg)
+            :"memory"
+            );
+    if(eax_reg != STM_SUCCESS)
+    {
+        printk("STM: Get Bios Resource Failed with error: %lu\n", \
+                    (unsigned long)eax_reg);
+        free_xenheap_page(resourcelist);
+        return -1;
+    }
+
+    resource = (STM_RSC*)resourcelist;
+    free_xenheap_page(resourcelist);
+    return edx_reg;
+}
 
 void launch_stm(void *unused)
 {
     u64 msr_content = 0;
-    /* int rc; */
     u64 eax_reg;
     unsigned int cpu;
+    void *resource = NULL;
+    uint32_t ret;
 
     /* Consult MSR IA32_FEATURE_CONTROL (0x3A) to find out if
      * dual-monitor-mode is supported.
@@ -95,6 +139,10 @@ void launch_stm(void *unused)
             return;
         }
 
+        do {
+            ret = get_bios_resource(resource);
+        } while ( ret > 0 );
+
         asm volatile(
                 ".byte 0x0f,0x01,0xc1\n"
                 :"=a"(eax_reg)
@@ -139,3 +187,4 @@ void launch_stm(void *unused)
 
     return;
 }
+
