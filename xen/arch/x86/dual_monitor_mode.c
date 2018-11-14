@@ -17,6 +17,7 @@
 static DEFINE_PER_CPU(paddr_t, temp_vmcs);
 static DEFINE_SPINLOCK(cntr_lock);
 volatile bool_t stmbspdone = false;
+volatile bool_t is_stm = false;
 static int number_ap = 0;
 
 static void set_temp_vmcs(void)
@@ -114,7 +115,6 @@ void protect_resources(void)
             :"memory"
             );
 
-    printk("STM_API_PROTECT_RESOURCE return: %016x\n", eax_reg);
     if(eax_reg != STM_SUCCESS)
     {
         printk("STM: Protect Resource failed with error: %d\n", \
@@ -255,6 +255,16 @@ void launch_stm(void *unused)
             return;
         }
         stmbspdone = true;
+        spin_lock(&cntr_lock);
+        while ( number_ap < ((int)num_online_cpus() - 1) )
+        {
+            spin_unlock(&cntr_lock);
+            spin_lock(&cntr_lock);
+        }
+        is_stm = true;
+        stmbspdone = false;
+        number_ap = 0;
+        spin_unlock(&cntr_lock);
     }
     else
     {
@@ -276,14 +286,55 @@ void launch_stm(void *unused)
         number_ap += 1;
         spin_unlock(&cntr_lock);
     }
-    spin_lock(&cntr_lock);
-    while ( number_ap < ((int)num_online_cpus() - 1) )
-    {
-        spin_unlock(&cntr_lock);
-        spin_lock(&cntr_lock);
-    }
-    spin_unlock(&cntr_lock);
+    return;
+}
 
+void teardown_stm(void *unused)
+{
+    uint32_t eax_reg = 0;
+
+    /* Teardown STM only if it has been previously enabled */
+    if ( !is_stm )
+    {
+        printk("STM: STM not enabled\n");
+        return;
+    }
+
+    if ( smp_processor_id() == 0 )
+    {
+        asm volatile(
+                ".byte 0x0f,0x01,0xc1\n"
+                :"=a"(eax_reg)
+                :"a"(STM_API_STOP));
+
+        if(eax_reg == STM_SUCCESS)
+            printk("STM: STM shutdown on CPU %d\n", smp_processor_id());
+        else
+        {
+            printk("STM: Failed to shutdown STM on CPU %d with error: \
+                    %032x\n", smp_processor_id(), eax_reg);
+            return;
+        }
+        stmbspdone = true;
+    }
+    else
+    {
+        while ( !stmbspdone ) {;}
+        /* Teardown STM */
+        asm volatile(
+                ".byte 0x0f,0x01,0xc1\n"
+                :"=a"(eax_reg)
+                :"a"(STM_API_STOP));
+
+        if ( eax_reg == STM_SUCCESS )
+            printk("STM: STM shutdown on CPU %d\n", smp_processor_id());
+        else
+        {
+            printk("STM: Failed to shutdown STM on CPU %d with error: \
+                    %032x\n", smp_processor_id(), eax_reg);
+            return;
+        }
+     }
     return;
 }
 

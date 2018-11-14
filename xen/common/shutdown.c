@@ -11,6 +11,7 @@
 #endif
 #include <asm/debugger.h>
 #include <public/sched.h>
+#include <asm/dual_monitor_mode.h>
 
 /* opt_noreboot: If true, machine will need manual reset on error. */
 bool_t __read_mostly opt_noreboot;
@@ -33,6 +34,10 @@ static void noreturn maybe_reboot(void)
 
 void hwdom_shutdown(u8 reason)
 {
+    /* STM Teardown */
+    smp_call_function(teardown_stm, NULL, 0);
+    teardown_stm(NULL);
+
     switch ( reason )
     {
     case SHUTDOWN_poweroff:

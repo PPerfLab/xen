@@ -12,6 +12,7 @@
 
 extern void launch_stm(void* unused);
 void manage_vmcs_database(uint64_t vmcsptr, uint32_t add_remove);
+extern void teardown_stm(void* unused);
 
 /*
  * STM VMCALL Codes

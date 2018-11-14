@@ -713,6 +713,10 @@ void vmx_cpu_down(void)
     if ( !this_cpu(vmxon) )
         return;
 
+    /* STM Teardown */
+    smp_call_function(teardown_stm, NULL, 0);
+    teardown_stm(NULL);
+
     local_irq_save(flags);
 
     while ( !list_empty(active_vmcs_list) )
