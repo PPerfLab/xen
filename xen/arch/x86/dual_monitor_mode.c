@@ -32,6 +32,61 @@ static void set_temp_vmcs(void)
     return;
 }
 
+void protect_resources(void)
+{
+    void *resourcelist;
+    STM_RSC *xenresources;
+    uint32_t eax_reg = STM_API_PROTECT_RESOURCE;
+    uint32_t ebx_reg = 0;
+    uint32_t ecx_reg = 0;
+    int page_index = 0;
+
+    printk("STM: Protecting Xen Resources\n");
+    if( (resourcelist = alloc_xenheap_pages(2, 0)) == NULL )
+    {
+        printk("STM: Failed to allocate resource page.\n");
+        return;
+    }
+
+    xenresources = (STM_RSC*)resourcelist;
+
+    xenresources->Msr.Hdr.RscType = MACHINE_SPECIFIC_REG;
+    xenresources->Msr.Hdr.Length = sizeof(STM_RSC_MSR_DESC);
+    xenresources->Msr.MsrIndex = MSR_IA32_MISC_ENABLE; /* 0x1A0 */
+    xenresources->Msr.WriteMask = (uint64_t) - 1;
+
+    xenresources++;
+    xenresources->Msr.Hdr.RscType = MACHINE_SPECIFIC_REG;
+    xenresources->Msr.Hdr.Length = sizeof(STM_RSC_MSR_DESC);
+    xenresources->Msr.MsrIndex = MSR_IA32_FEATURE_CONTROL;
+    xenresources->Msr.ReadMask = (uint64_t) - 1;
+    xenresources->Msr.WriteMask = (uint64_t) - 1;
+
+    ebx_reg = (uint64_t)__pa((unsigned long)resourcelist + \
+                    page_index*PAGE_SIZE);
+    ecx_reg = ((uint64_t)__pa((unsigned long)resourcelist + \
+                    page_index*PAGE_SIZE)) >> 32;
+
+    asm volatile(
+            ".byte 0x0f,0x01,0xc1\n"
+            :"=a"(eax_reg)
+            :"a"(eax_reg), "b"(ebx_reg), "c"(ecx_reg)
+            :"memory"
+            );
+
+    printk("STM_API_PROTECT_RESOURCE return: %016x\n", eax_reg);
+    if(eax_reg != STM_SUCCESS)
+    {
+        printk("STM: Protect Resource failed with error: %d\n", \
+                xenresources->Msr.Hdr.ReturnStatus);
+        free_xenheap_page(resourcelist);
+        return;
+    }
+    clear_page(resourcelist);
+    free_xenheap_page(resourcelist);
+    return;
+}
+
 uint32_t get_bios_resource(STM_RSC *resource)
 {
     void *resourcelist;
@@ -139,10 +194,14 @@ void launch_stm(void *unused)
             return;
         }
 
+        /* Get Bios Resources */
         do {
             ret = get_bios_resource(resource);
         } while ( ret > 0 );
 
+        /* Protect Xen Resources */
+        protect_resources();
+        /* Start STM */
         asm volatile(
                 ".byte 0x0f,0x01,0xc1\n"
                 :"=a"(eax_reg)
