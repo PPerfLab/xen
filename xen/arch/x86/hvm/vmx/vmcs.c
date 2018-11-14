@@ -41,6 +41,7 @@
 #include <asm/spec_ctrl.h>
 #include <asm/tboot.h>
 #include <asm/apic.h>
+#include <asm/dual_monitor_mode.h>
 
 static bool_t __read_mostly opt_vpid_enabled = 1;
 boolean_param("vpid", opt_vpid_enabled);
@@ -1701,12 +1702,18 @@ int vmx_create_vmcs(struct vcpu *v)
         return rc;
     }
 
+    manage_vmcs_database((uint64_t)arch_vmx->vmcs_pa, \
+                        STM_VMCS_DATABASE_REQUEST_ADD);
+
     return 0;
 }
 
 void vmx_destroy_vmcs(struct vcpu *v)
 {
     struct arch_vmx_struct *arch_vmx = &v->arch.hvm_vmx;
+
+    manage_vmcs_database((uint64_t)arch_vmx->vmcs_pa, \
+                        STM_VMCS_DATABASE_REQUEST_REMOVE);
 
     vmx_clear_vmcs(v);
 

@@ -11,6 +11,7 @@
 #include <asm/hvm/io.h>
 
 extern void launch_stm(void* unused);
+void manage_vmcs_database(uint64_t vmcsptr, uint32_t add_remove);
 
 /*
  * STM VMCALL Codes
@@ -175,5 +176,42 @@ typedef union {
   STM_RSC_ALL_RESOURCES_DESC      All;
   STM_REGISTER_VIOLATION_DESC     RegisterViolation;
 } STM_RSC;
+
+/*
+ * VMCS database
+ */
+#define STM_VMCS_DATABASE_REQUEST_ADD    1
+#define STM_VMCS_DATABASE_REQUEST_REMOVE 0
+
+/* Values for DomainType
+ * Intepreter of DomainType
+ */
+#define DOMAIN_DISALLOWED_IO_OUT (1u << 0)
+#define DOMAIN_DISALLOWED_IO_IN  (1u << 1)
+#define DOMAIN_INTEGRITY         (1u << 2)
+#define DOMAIN_CONFIDENTIALITY   (1u << 3)
+
+#define DOMAIN_UNPROTECTED           0x00
+#define DOMAIN_INTEGRITY_PROT_OUT_IN (DOMAIN_INTEGRITY)
+#define DOMAIN_FULLY_PROT_OUT_IN     (DOMAIN_CONFIDENTIALITY | \
+                                        DOMAIN_INTEGRITY)
+#define DOMAIN_FULLY_PROT            (DOMAIN_CONFIDENTIALITY | \
+                                        DOMAIN_INTEGRITY | \
+                                        DOMAIN_DISALLOWED_IO_IN | \
+                                        DOMAIN_DISALLOWED_IO_OUT)
+
+/* Values for XStatePolicy */
+#define XSTATE_READWRITE      0x00
+#define XSTATE_READONLY       0x01
+#define XSTATE_SCRUB          0x03
+
+typedef struct {
+  uint64_t VmcsPhysPointer; /* bits 11:0 are reserved and must be 0 */
+  uint32_t DomainType :4;
+  uint32_t XStatePolicy :2;
+  uint32_t DegradationPolicy :4;
+  uint32_t Reserved1 :22; /* Must be 0 */
+  uint32_t AddOrRemove;
+} STM_VMCS_DATABASE_REQUEST;
 
 #endif

@@ -32,6 +32,46 @@ static void set_temp_vmcs(void)
     return;
 }
 
+void manage_vmcs_database(uint64_t vmcsptr, uint32_t add_remove)
+{
+    STM_VMCS_DATABASE_REQUEST *vmcsdb_request = NULL;
+    void *requestlist;
+    uint32_t eax_reg = 0;
+    uint32_t ebx_reg = 0;
+    uint32_t ecx_reg = 0;
+
+    printk("STM: Invoking Operation on VMCS Database\n");
+    if( (requestlist = alloc_xenheap_pages(1, 0)) == NULL )
+    {
+        printk("STM: Failed to allocate resource page.\n");
+        return;
+    }
+
+    vmcsdb_request = (STM_VMCS_DATABASE_REQUEST*)requestlist;
+    vmcsdb_request->VmcsPhysPointer = vmcsptr;
+    vmcsdb_request->DomainType = DOMAIN_UNPROTECTED;
+    vmcsdb_request->XStatePolicy = XSTATE_READONLY;
+    vmcsdb_request->DegradationPolicy = DOMAIN_UNPROTECTED;
+    vmcsdb_request->AddOrRemove = add_remove;
+    vmcsdb_request->Reserved1 = 0x0;
+
+    ebx_reg = (uint64_t)__pa((unsigned long)requestlist);
+    ecx_reg = ((uint64_t)__pa((unsigned long)requestlist)) >> 32;
+
+    asm volatile(
+            ".byte 0x0f,0x01,0xc1\n"
+            :"=a"(eax_reg)
+            :"a"(STM_API_MANAGE_VMCS_DATABASE), "b"(ebx_reg), "c"(ecx_reg)
+            );
+
+    if(eax_reg != STM_SUCCESS)
+        printk("STM: Operation on VMCS Database failed with error: %lx\n", \
+                (unsigned long)eax_reg);
+    free_xenheap_page(requestlist);
+    clear_page(requestlist);
+    return;
+}
+
 void protect_resources(void)
 {
     void *resourcelist;
