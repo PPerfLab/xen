@@ -11,7 +11,7 @@
 #include <asm/hvm/io.h>
 
 extern void launch_stm(void* unused);
-void manage_vmcs_database(uint64_t vmcsptr, uint32_t add_remove);
+void manage_vmcs_database(uint64_t vmcs_ptr, uint32_t add_remove);
 extern void teardown_stm(void* unused);
 
 /*

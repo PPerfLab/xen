@@ -1,11 +1,10 @@
 /*
  * dual_monitor_mode.c: Interface to Intel's SMM Transfer Monitor (STM)
  *
+ * This program contains functions that opt-in to STM and create STM policies
+ * to protect Xen's critical resources.
+ *
  * Tejaswini Vibhute - <tejaswiniav@gmail.com> - Portland State University
- *
- *  This program contains functions that opt-in to STM and create STM policies
- *  to protect Xen's critical resources.
- *
  */
 
 #include <asm/dual_monitor_mode.h>
@@ -16,7 +15,7 @@
 
 static DEFINE_PER_CPU(paddr_t, temp_vmcs);
 static DEFINE_SPINLOCK(cntr_lock);
-volatile bool_t stmbspdone = false;
+volatile bool_t stmbsp_done = false;
 volatile bool_t is_stm = false;
 static int number_ap = 0;
 
@@ -33,31 +32,37 @@ static void set_temp_vmcs(void)
     return;
 }
 
-void manage_vmcs_database(uint64_t vmcsptr, uint32_t add_remove)
+void manage_vmcs_database(uint64_t vmcs_ptr, uint32_t add_remove)
 {
     STM_VMCS_DATABASE_REQUEST *vmcsdb_request = NULL;
-    void *requestlist;
+    void *request_list;
     uint32_t eax_reg = 0;
     uint32_t ebx_reg = 0;
     uint32_t ecx_reg = 0;
 
     printk("STM: Invoking Operation on VMCS Database\n");
-    if( (requestlist = alloc_xenheap_pages(1, 0)) == NULL )
+    if ( !is_stm )
+    {
+        printk("STM: STM not enabled\n");
+        return;
+    }
+
+    if ( (request_list = alloc_xenheap_pages(1, 0)) == NULL )
     {
         printk("STM: Failed to allocate resource page.\n");
         return;
     }
 
-    vmcsdb_request = (STM_VMCS_DATABASE_REQUEST*)requestlist;
-    vmcsdb_request->VmcsPhysPointer = vmcsptr;
+    vmcsdb_request = (STM_VMCS_DATABASE_REQUEST*)request_list;
+    vmcsdb_request->VmcsPhysPointer = vmcs_ptr;
     vmcsdb_request->DomainType = DOMAIN_UNPROTECTED;
     vmcsdb_request->XStatePolicy = XSTATE_READONLY;
     vmcsdb_request->DegradationPolicy = DOMAIN_UNPROTECTED;
     vmcsdb_request->AddOrRemove = add_remove;
     vmcsdb_request->Reserved1 = 0x0;
 
-    ebx_reg = (uint64_t)__pa((unsigned long)requestlist);
-    ecx_reg = ((uint64_t)__pa((unsigned long)requestlist)) >> 32;
+    ebx_reg = (uint64_t)__pa((unsigned long)request_list);
+    ecx_reg = ((uint64_t)__pa((unsigned long)request_list)) >> 32;
 
     asm volatile(
             ".byte 0x0f,0x01,0xc1\n"
@@ -65,17 +70,17 @@ void manage_vmcs_database(uint64_t vmcsptr, uint32_t add_remove)
             :"a"(STM_API_MANAGE_VMCS_DATABASE), "b"(ebx_reg), "c"(ecx_reg)
             );
 
-    if(eax_reg != STM_SUCCESS)
+    if ( eax_reg != STM_SUCCESS )
         printk("STM: Operation on VMCS Database failed with error: %lx\n", \
                 (unsigned long)eax_reg);
-    free_xenheap_page(requestlist);
-    clear_page(requestlist);
+    free_xenheap_page(request_list);
+    clear_page(request_list);
     return;
 }
 
 void protect_resources(void)
 {
-    void *resourcelist;
+    void *resource_list;
     STM_RSC *xenresources;
     uint32_t eax_reg = STM_API_PROTECT_RESOURCE;
     uint32_t ebx_reg = 0;
@@ -83,13 +88,13 @@ void protect_resources(void)
     int page_index = 0;
 
     printk("STM: Protecting Xen Resources\n");
-    if( (resourcelist = alloc_xenheap_pages(2, 0)) == NULL )
+    if ( (resource_list = alloc_xenheap_pages(2, 0)) == NULL )
     {
         printk("STM: Failed to allocate resource page.\n");
         return;
     }
 
-    xenresources = (STM_RSC*)resourcelist;
+    xenresources = (STM_RSC*)resource_list;
 
     xenresources->Msr.Hdr.RscType = MACHINE_SPECIFIC_REG;
     xenresources->Msr.Hdr.Length = sizeof(STM_RSC_MSR_DESC);
@@ -103,9 +108,9 @@ void protect_resources(void)
     xenresources->Msr.ReadMask = (uint64_t) - 1;
     xenresources->Msr.WriteMask = (uint64_t) - 1;
 
-    ebx_reg = (uint64_t)__pa((unsigned long)resourcelist + \
+    ebx_reg = (uint64_t)__pa((unsigned long)resource_list + \
                     page_index*PAGE_SIZE);
-    ecx_reg = ((uint64_t)__pa((unsigned long)resourcelist + \
+    ecx_reg = ((uint64_t)__pa((unsigned long)resource_list + \
                     page_index*PAGE_SIZE)) >> 32;
 
     asm volatile(
@@ -115,21 +120,21 @@ void protect_resources(void)
             :"memory"
             );
 
-    if(eax_reg != STM_SUCCESS)
+    if ( eax_reg != STM_SUCCESS )
     {
         printk("STM: Protect Resource failed with error: %d\n", \
                 xenresources->Msr.Hdr.ReturnStatus);
-        free_xenheap_page(resourcelist);
+        free_xenheap_page(resource_list);
         return;
     }
-    clear_page(resourcelist);
-    free_xenheap_page(resourcelist);
+    clear_page(resource_list);
+    free_xenheap_page(resource_list);
     return;
 }
 
 uint32_t get_bios_resource(STM_RSC *resource)
 {
-    void *resourcelist;
+    void *resource_list;
     uint32_t eax_reg = 0;
     uint32_t ebx_reg = 0;
     uint32_t ecx_reg = 0;
@@ -138,7 +143,7 @@ uint32_t get_bios_resource(STM_RSC *resource)
 
     printk("STM: Obtaining BIOS resource list\n");
 
-    if ( (resourcelist = alloc_xenheap_pages(2, 0)) == NULL )
+    if ( (resource_list = alloc_xenheap_pages(2, 0)) == NULL )
     {
         printk("STM: Failed to allocate resource page.\n");
         return -1;
@@ -146,9 +151,9 @@ uint32_t get_bios_resource(STM_RSC *resource)
 
     eax_reg = STM_API_GET_BIOS_RESOURCES;
 
-    ebx_reg = (uint64_t)__pa((struct page_info*)resourcelist + \
+    ebx_reg = (uint64_t)__pa((struct page_info*)resource_list + \
             page_index*PAGE_SIZE);
-    ecx_reg = ((uint64_t)__pa((struct page_info*)resourcelist + \
+    ecx_reg = ((uint64_t)__pa((struct page_info*)resource_list + \
                 page_index*PAGE_SIZE)) >> 32;
     edx_reg = page_index;
 
@@ -158,16 +163,16 @@ uint32_t get_bios_resource(STM_RSC *resource)
             :"a"(eax_reg), "b"(ebx_reg), "c"(ecx_reg), "d"(edx_reg)
             :"memory"
             );
-    if(eax_reg != STM_SUCCESS)
+    if ( eax_reg != STM_SUCCESS )
     {
         printk("STM: Get Bios Resource Failed with error: %lu\n", \
                     (unsigned long)eax_reg);
-        free_xenheap_page(resourcelist);
+        free_xenheap_page(resource_list);
         return -1;
     }
 
-    resource = (STM_RSC*)resourcelist;
-    free_xenheap_page(resourcelist);
+    resource = (STM_RSC*)resource_list;
+    free_xenheap_page(resource_list);
     return edx_reg;
 }
 
@@ -179,23 +184,27 @@ void launch_stm(void *unused)
     void *resource = NULL;
     uint32_t ret;
 
-    /* Consult MSR IA32_FEATURE_CONTROL (0x3A) to find out if
-     * dual-monitor-mode is supported.
-     * bit 0: lock bit
-     * bit 1: enable VMXON in SMX operation
-     * bit 2: enable VMXON outside of SMX operation
+    /* Consult MSR IA32_VMX_BASIC to find out if STM is supported.
+     * If STM is supported then bit 49 of this MSR will be set and
+     * MSR IA32_SMM_MONITOR_CTL exists on such a processor.
+     * Trying to access MSR IA32_SMM_MONITOR_CTL on a processor that does not
+     * support STM will result in a #GP Fault.
      */
-    rdmsr_safe(MSR_IA32_FEATURE_CONTROL, msr_content);
-    if ( (msr_content & IA32_FEATURE_CONTROL_LOCK) == 0 || \
-        ((msr_content & IA32_FEATURE_CONTROL_ENABLE_VMXON_INSIDE_SMX) == 0 && \
-        (msr_content & IA32_FEATURE_CONTROL_ENABLE_VMXON_OUTSIDE_SMX) == 0) )
+    rdmsr_safe(MSR_IA32_VMX_BASIC, msr_content);
+    if ( (msr_content & VMX_BASIC_DUAL_MONITOR) == 0 )
     {
-        printk("STM: VMX not enabled\n");
+        printk("STM: STM is not supported on the processor\n");
+        return;
+    }
+
+    if ( !this_cpu(vmxon) )
+    {
+        printk("STM: VMX is not enabled\n");
         return;
     }
 
     msr_content = 0;
-    /* Proceed only if support is determined. */
+    /* Proceed only if BIOS has opt-in to STM. */
     rdmsr_safe(MSR_IA32_SMM_MONITOR_CTL, msr_content);
     if ( (msr_content & IA32_SMM_MONITOR_CTL_VALID) == 0 )
     {
@@ -254,7 +263,7 @@ void launch_stm(void *unused)
             printk("STM: Unable to opt-in on CPU %d\n", cpu);
             return;
         }
-        stmbspdone = true;
+        stmbsp_done = true;
         spin_lock(&cntr_lock);
         while ( number_ap < ((int)num_online_cpus() - 1) )
         {
@@ -262,13 +271,19 @@ void launch_stm(void *unused)
             spin_lock(&cntr_lock);
         }
         is_stm = true;
-        stmbspdone = false;
+        stmbsp_done = false;
         number_ap = 0;
         spin_unlock(&cntr_lock);
     }
     else
     {
-        while ( !stmbspdone ) {;}
+        while ( !stmbsp_done ) {;}
+        if ( !this_cpu(vmxon) )
+        {
+            printk("STM: VMX not enabled\n");
+            return;
+        }
+
         asm volatile(
                 ".byte 0x0f,0x01,0xc1\n"
                 :"=a"(eax_reg)
@@ -307,7 +322,7 @@ void teardown_stm(void *unused)
                 :"=a"(eax_reg)
                 :"a"(STM_API_STOP));
 
-        if(eax_reg == STM_SUCCESS)
+        if ( eax_reg == STM_SUCCESS )
             printk("STM: STM shutdown on CPU %d\n", smp_processor_id());
         else
         {
@@ -315,11 +330,11 @@ void teardown_stm(void *unused)
                     %032x\n", smp_processor_id(), eax_reg);
             return;
         }
-        stmbspdone = true;
+        stmbsp_done = true;
     }
     else
     {
-        while ( !stmbspdone ) {;}
+        while ( !stmbsp_done ) {;}
         /* Teardown STM */
         asm volatile(
                 ".byte 0x0f,0x01,0xc1\n"
