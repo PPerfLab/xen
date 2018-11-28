@@ -10,10 +10,6 @@
 
 #include <asm/hvm/io.h>
 
-extern void launch_stm(void* unused);
-void manage_vmcs_database(uint64_t vmcs_ptr, uint32_t add_remove);
-extern void teardown_stm(void* unused);
-
 /*
  * STM VMCALL Codes
  */
@@ -214,5 +210,12 @@ typedef struct {
   uint32_t Reserved1 :22; /* Must be 0 */
   uint32_t AddOrRemove;
 } STM_VMCS_DATABASE_REQUEST;
+
+extern void launch_stm(void* unused);
+int manage_vmcs_database(uint64_t vmcs_ptr, uint32_t add_remove);
+extern void teardown_stm(void* unused);
+void dump_stm_resource_header(STM_RSC *Resource);
+void dump_stm_resource_node(STM_RSC *Resource);
+void dump_stm_resource(STM_RSC *Resource);
 
 #endif
