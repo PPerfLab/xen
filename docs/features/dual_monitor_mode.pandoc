@@ -1,0 +1,180 @@
+% Intel's Dual Monitor Mode enabling for Xen
+% Revision 1.0
+
+\clearpage
+
+# Basics
+
+---------------- ----------------------------------------------------
+         Status: **Tech Preview/Experimental**
+
+Architecture(s): Intel x86
+
+   Component(s): Hypervisor
+
+       Hardware: CPUs supporting dual-monitor treatment of SMIs
+---------------- ----------------------------------------------------
+
+# Overview
+
+Intel's dual monitor mode also called as SMI Transfer Monitor (STM) / SMM
+Transfer Monitor / peer monitor / executive monitor is a VMM in SMM. It is
+designed to execute in co-operation with VMMs like Xen to constrain the resource
+accesses of SMI handlers. Intel's STM is designed to be activated in a two-step
+process.
+
+1. Activation or opt-in by BIOS:
+    The implementation for BIOS opt-in is available on github [1].
+
+2. Activation or opt-in by Xen:
+    This implementation for opt-in by Xen follows the STM User guide [2] for a
+    non-TXT capable system. It demonstrates how Xen can participate in STM 
+    opt-in and use its features to create resource protection profiles, to avoid
+    being tampered by a malicious SMI handler.
+
+# User details
+
+This feature is compiled in the Xen kernel and no user visible knobs are planned
+to be exposed. A typical user may not need to tinker with this feature. 
+
+# Technical details
+
+An advanced user or a developer who would like to experiment with this feature
+and create their own resource protection profiles or define different policies 
+may do so by adjusting the code in xen/arch/x86/dual_monitor_mode.c and 
+xen/include/asm-x86/dual_monitor_mode.h
+
+It should be noted that this implementation is for a system that does not
+have Intel's TXT or the feature is disabled. Hence, in the details below the 
+steps required on a Intel TXT capable system have been omitted. 
+In order to use these changes for a Intel TXT system, the Xen developer should 
+refer the Intel TXT MLE developer's guide [2], STM User Guide [4] and Intel SDM
+[3] to add necessary support.
+
+## Xen opt-in steps
+
+The opt-in is started by calling the function launch_stm() setup.c on all the
+online processors.
+As a first step, the launch process should verify that CPU has executed VMXON on
+all the online processors and it is currently executing in VMX root mode, 
+processor supports dual monitor treatment os SMIs and that BIOS has opt-in to 
+STM. If all these conditions are satisfied only then the opt-in process should
+commence.
+
+The opt-in process requires execution of VMCALL STM_API_INITIALIZE_PROTECTION 
+on one logical CPU and STM_API_START VMCALL on all the logical CPUs. Optionally 
+STM_APT_GET_BIOS_RESOURCE VMCALL and STM_API_PROTECT_RESOURCE VMCALL may also be
+executed.
+
+The execution of STM_API_INTIALIZE_PROTECTION VMCALL returns a status code in
+register EAX and STM capabilities in register EBX. STM capabilities indicates
+what protection granularity level the STM implementation being used in BIOS
+supports [4].
+
+    ```
+    EBX register
+    +--+-------------------------------------------------+--+--+--+--+
+    |31|                        30...4                   | 3| 2| 1| 0|
+    +--+-------------------------------------------------+--+--+--+--+
+    |                                                    | M| B| B|  |
+    |                       RESERVED (0)                 | S| G| G| 0|
+    |                                                    | R| M| I|  |
+    +--+-------------------------------------------------+--+--+--+--+
+    ``` 
+    BGI : When set to 1 indicates STM supports byte granular MMIO range.
+          When set to 0 indicates STM supports page granular MMIO range.
+    BGM : When set to 1 indicates STM supports byte granular memory range.
+          When set to 0 indicates STM supports page granular memory range.
+    MSR : When set to 1 indicates STM supports bit granular MSR resource.
+          When set to 0 indicates STM supports whole MSR granular resource.
+
+The current BIOS STM implementation supports only page granular MMIO range and
+memory range and whole MSR granular resource protection. Hence the EBX is 0x0.
+Hence, in the opt-in implementation this is assumed and the resource protection
+policies are applied based on this assumption. A developer who wants to
+customize the STM capabilties, should check for this register value and create
+protection policies accordingly.
+
+The STM_APT_GET_BIOS_RESOURCE VMCALL returns a list of BIOS requested resources.
+This list can be used by Xen, to determine for which resources it can create
+protections. A sample implementation of resource protection policies is present
+in function protect_resources() for MSRs. These two VMCALLs may be executed on
+only one CPU and their effect will be resonated to all other CPUs. These two
+VMCALLs may also be invoked at any time in the lifecycle of STM. 
+
+Finally once the STM_API_START VMCALL is successfully executed on all the 
+logical CPUs, STM is launched.
+
+In order to protect Domains from being tampered by SMI handler, Xen can create a
+policy over their respective VMCSs and call STM_API_VMCS_MANAGE_VMCS_DATABASE 
+VMCALL to add this policy to STM's VMCS list. This addition facilitates STM to
+enforce control over what Domain resources the SMI handlers can access. A sample
+implementation of this can be found in manage_vmcs_database(). This function is
+called everytime a VMCS is created for Xen's DomU. When a VMCS is destroyed its
+entry from STM's VMCS Database should also be deleted. A stale entry in the STM
+can result in unexpected system behavior. Deletion of a VMCS pointer from the
+VMCS Database is done by calling STM_API_VMCS_MANAGE_VMCS_DATABASE VMCALL with a
+delete knob.
+
+## STM Teardown
+Before Xen executes VMXOFF to tear itself down, Xen should call the STM_API_STOP
+VMCALL on all the logical CPUs to teardown the Executive Monitor. Trying to
+execute VMXOFF in Xen while STM is running will result in GP Fault.
+
+# Limitations
+
+The current opt-in code does not implement the steps required for a TXT capable
+system.
+
+# Testing
+
+This feature has been tested on Minnowboard Turbot Quad core and Dual core
+hardware running minnowmax-0.98 firmware, Xen stable-4.11.0
+hypervisor and Ubuntu 14.04 Dom0 with kernel 4.11.0
+This board has a Silvermont Atom processor and it does not support Intel TXT.
+
+# Areas for improvement
+
+* Memory Protection policies: More policies can be added to demonstrate Xen
+kernel address space protection.
+
+* STM Capabilities: The launch_stm() can be enhanced to check capabilities
+value returned by STM_API_INTIALIZE_PROTECTION VMCALL and use it in
+protect_resources() to appropriately specify resource protections for an STM
+implementaion that supports heterogenous capabilty values.
+
+# Known issues
+
+STM teardown can be optimized to be invoked on all the logical CPUs except the
+BSP first and then finally on the BSP.
+
+# Acknowledgments
+
+This work was done in the EPA-RIMM group at Portland State University (PSU) by 
+Tejaswini Vibhute while working on the project EPA-RIMM-V [6] under the guidance 
+of Prof. Karen L. Karavanic. 
+
+This material is based upon work supported by the National Science Foundation
+under Grant No. 1528185. Any opinions, findings, and conclusions or
+recommendations expressed in this material are those of the author(s) and not
+necessarily reflect the views of the National Science Foundation.
+
+# References
+
+1. STM Source Code: https://github.com/jyao1/STM
+2. Intel Trusted Execution Technology (Intel TXT) Software Development Guide, 
+   November 2017, Revision 015
+3. Intel 64 and IA-32 Architectures Software Developer’s Manual, September 2016
+4. SMI Transfer Monitor (STM) User Guide, August 2015, Revision 1.00
+5. Delgado, B., & Karavanic, K. L. (2018). EPA-RIMM: A Framework for Dynamic 
+   SMM-based Runtime Integrity Measurement. arXiv preprint arXiv:1805.03755. 
+6. Vibhute, T. A. (2018). EPA-RIMM-V: Efficient Rootkit Detection for 
+   Virtualized Environments.
+
+# History
+
+------------------------------------------------------------------------
+Date       Revision Version  Notes
+---------- -------- -------- -------------------------------------------
+2018-11-30 1.00     Xen 4.11 Added the design document
+---------- -------- -------- -------------------------------------------
