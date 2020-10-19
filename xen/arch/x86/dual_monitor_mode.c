@@ -31,6 +31,7 @@
 #include <asm/msr.h>
 #include <asm/hvm/vmx/vmx.h>
 #include <asm/hvm/vmx/vmcs.h>
+//#include <xen/guest_access.h>
 
 static DEFINE_PER_CPU(paddr_t, temp_vmcs);
 static DEFINE_SPINLOCK(cntr_lock);
@@ -137,11 +138,14 @@ int manage_vmcs_database(uint64_t vmcs_ptr, uint32_t add_remove)
 int protect_resources(void)
 {
     void *resource_list;
-    STM_RSC *xenresources;
+    uint8_t *xenresources;
     uint32_t eax_reg = STM_API_PROTECT_RESOURCE;
     uint32_t ebx_reg = 0;
     uint32_t ecx_reg = 0;
     int page_index = 0;
+    STM_RSC_MSR_DESC MsrDesc = {};
+    STM_RSC_IO_DESC IoDesc = {};
+    STM_RSC_END EndDesc = {};
 
     printk("STM: Protecting Xen Resources\n");
     if ( (resource_list = alloc_xenheap_pages(1, 0)) == NULL )
@@ -150,20 +154,90 @@ int protect_resources(void)
         return -1;
     }
 
-    xenresources = (STM_RSC*)resource_list;
+    xenresources = (uint8_t*)resource_list;
 
-    xenresources->Msr.Hdr.RscType = MACHINE_SPECIFIC_REG;
-    xenresources->Msr.Hdr.Length = sizeof(STM_RSC_MSR_DESC);
-    xenresources->Msr.MsrIndex = MSR_IA32_MISC_ENABLE; /* 0x1A0 */
-    xenresources->Msr.WriteMask = (uint64_t) - 1;
+    memset(xenresources, 0, 4096);
 
-    xenresources++;
-    xenresources->Msr.Hdr.RscType = MACHINE_SPECIFIC_REG;
-    xenresources->Msr.Hdr.Length = sizeof(STM_RSC_MSR_DESC);
-    xenresources->Msr.MsrIndex = MSR_IA32_FEATURE_CONTROL;
-    xenresources->Msr.ReadMask = (uint64_t) - 1;
-    xenresources->Msr.WriteMask = (uint64_t) - 1;
+    MsrDesc.Hdr.RscType = MACHINE_SPECIFIC_REG;
+    MsrDesc.Hdr.Length = sizeof(STM_RSC_MSR_DESC);
+    MsrDesc.Hdr.ReturnStatus = 0;
+    MsrDesc.Hdr.Reserved = 0;
+    MsrDesc.Hdr.IgnoreResource = 0;
+    MsrDesc.MsrIndex = 0x9b;
+    MsrDesc.KernelModeProcessing = 1;
+    MsrDesc.Reserved = 0;
+    MsrDesc.WriteMask = (uint64_t) - 1;
+    MsrDesc.ReadMask = 0;
 
+    memcpy(xenresources, &MsrDesc, sizeof(MsrDesc));
+    xenresources += MsrDesc.Hdr.Length;
+
+    MsrDesc.Hdr.RscType = MACHINE_SPECIFIC_REG;
+    MsrDesc.Hdr.Length = sizeof(STM_RSC_MSR_DESC);
+    MsrDesc.Hdr.ReturnStatus = 0;
+    MsrDesc.Hdr.Reserved = 0;
+    MsrDesc.Hdr.IgnoreResource = 0;
+    MsrDesc.MsrIndex = MSR_IA32_MISC_ENABLE; /* 0x1A0 */
+    MsrDesc.KernelModeProcessing = 0;
+    MsrDesc.Reserved = 0;
+    MsrDesc.WriteMask = (uint64_t) - 1;
+    MsrDesc.ReadMask = 0;
+
+    memcpy(xenresources, &MsrDesc, sizeof(MsrDesc));
+    xenresources += MsrDesc.Hdr.Length;
+
+    MsrDesc.Hdr.RscType = MACHINE_SPECIFIC_REG;
+    MsrDesc.Hdr.Length = sizeof(STM_RSC_MSR_DESC);
+    MsrDesc.Hdr.ReturnStatus = 0;
+    MsrDesc.Hdr.Reserved = 0;
+    MsrDesc.Hdr.IgnoreResource = 0;
+    MsrDesc.MsrIndex =MSR_IA32_SYSENTER_EIP; /* 0x176 */
+    MsrDesc.KernelModeProcessing = 0;
+    MsrDesc.Reserved = 0;
+    MsrDesc.WriteMask = (uint64_t) - 1;
+    MsrDesc.ReadMask  = (uint64_t) - 1;
+
+    memcpy(xenresources, &MsrDesc, sizeof(MsrDesc));
+    xenresources += MsrDesc.Hdr.Length;
+
+    MsrDesc.Hdr.RscType = MACHINE_SPECIFIC_REG;
+    MsrDesc.Hdr.Length = sizeof(STM_RSC_MSR_DESC);
+    MsrDesc.Hdr.ReturnStatus = 0;
+    MsrDesc.Hdr.Reserved = 0;
+    MsrDesc.Hdr.IgnoreResource = 0;
+    MsrDesc.MsrIndex = MSR_IA32_FEATURE_CONTROL;
+    MsrDesc.KernelModeProcessing = 0;
+    MsrDesc.Reserved = 0;
+    MsrDesc.ReadMask = (uint64_t) - 1;
+    MsrDesc.WriteMask = (uint64_t) - 1;
+
+    memcpy(xenresources, &MsrDesc, sizeof(MsrDesc));
+    xenresources += MsrDesc.Hdr.Length;
+
+    IoDesc.Hdr.RscType = IO_RANGE;
+    IoDesc.Hdr.Length = sizeof(STM_RSC_IO_DESC);
+    IoDesc.Hdr.ReturnStatus = 0;
+    IoDesc.Hdr.Reserved = 0;
+    IoDesc.Hdr.IgnoreResource = 0;
+    IoDesc.Base = 0x60; // 0x60 to 0x64
+    IoDesc.Length = 5;
+    IoDesc.Reserved = 0;
+
+    memcpy(xenresources, &IoDesc, sizeof(IoDesc));
+    xenresources += IoDesc.Hdr.Length;
+
+    // Termination
+    EndDesc.Hdr.RscType = END_OF_RESOURCES;
+    EndDesc.Hdr.Length = sizeof(STM_RSC_END);
+    EndDesc.Hdr.ReturnStatus = 0;
+    EndDesc.Hdr.Reserved = 0;
+    EndDesc.Hdr.IgnoreResource = 0;
+    EndDesc.ResourceListContinuation = 0;
+
+    memcpy(xenresources, &EndDesc, sizeof(EndDesc));
+
+    printk("\nGoing to request protection for: %lx", (uint64_t)resource_list);
+    dump_stm_resource(resource_list);
     ebx_reg = (uint64_t)__pa((unsigned long)resource_list + \
                     page_index*PAGE_SIZE);
     ecx_reg = ((uint64_t)__pa((unsigned long)resource_list + \
@@ -181,7 +255,7 @@ int protect_resources(void)
         printk("STM: STM_API_PROTECT_RESOURCE failed with error: 0x%lx\n", \
                 (unsigned long)eax_reg);
         printk("STM: STM_API_PROTECT_RESOURCE return status in Hdr: %d\n", \
-                xenresources->Msr.Hdr.ReturnStatus);
+                EndDesc.Hdr.ReturnStatus);
         free_xenheap_page(resource_list);
         return -1;
     }
